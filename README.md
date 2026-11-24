@@ -12,6 +12,21 @@
 
 ## 快速开始
 
+### 快捷命令 `ais`（推荐，任意目录一键启停）
+
+已提供控制脚本 [ais](ais) 并软链至 `~/.local/bin/ais`，在终端任意目录直接输入：
+
+```bash
+ais             # 一键切换：未运行则后台启动并打开网页；运行中则直接关闭
+ais start       # 或 ais on：后台启动并打开浏览器（可透传参数，如 ais start -clash-api http://127.0.0.1:9097）
+ais stop        # 或 ais off：关闭后台服务
+ais status      # 或 ais st：查看运行状态、PID 与日志路径
+ais restart     # 重启服务
+ais build       # 重新编译二进制
+ais log         # 查看最近日志
+ais cli         # 直接在终端运行测速（等价于 ai-speed -cli）
+```
+
 ### 启动 Web 界面（默认）
 
 ```bash

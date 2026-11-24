@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve symlinks so the script works when invoked via ~/.local/bin/ais
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  TARGET="$(readlink "$SOURCE")"
+  if [[ "$TARGET" != /* ]]; then
+    SOURCE="$DIR/$TARGET"
+  else
+    SOURCE="$TARGET"
+  fi
+done
+PROJECT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+BIN="$PROJECT_DIR/ai-speed"
+
+ADDR="${AI_SPEED_ADDR:-127.0.0.1:8787}"
+PORT="${ADDR##*:}"
+URL="http://$ADDR"
+STATE_DIR="$HOME/.local/state/ai-speed"
+PID_FILE="$STATE_DIR/ai-speed.pid"
+LOG_FILE="$STATE_DIR/ai-speed.log"
+
+mkdir -p "$STATE_DIR"
+
+is_ai_speed_pid() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  local comm
+  comm="$(ps -p "$pid" -o comm= 2>/dev/null || true)"
+  [[ "$comm" == *ai-speed* ]]
+}
+
+find_pid() {
+  if [[ -f "$PID_FILE" ]]; then
+    local pid
+    pid="$(tr -d '[:space:]' < "$PID_FILE" 2>/dev/null || true)"
+    if is_ai_speed_pid "$pid"; then
+      echo "$pid"
+      return 0
+    fi
+    rm -f "$PID_FILE"
+  fi
+
+  local port_pid
+  port_pid="$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -n 1 || true)"
+  if is_ai_speed_pid "$port_pid"; then
+    echo "$port_pid"
+    return 0
+  fi
+
+  return 1
+}
+
+ensure_bin() {
+  if [[ ! -x "$BIN" ]]; then
+    echo "未找到二进制文件，正在编译 $BIN ..."
+    (cd "$PROJECT_DIR" && go build -o "$BIN" .)
+  fi
+}
+
+open_url() {
+  if [[ "${AI_SPEED_NO_OPEN:-0}" == "1" ]]; then
+    return 0
+  fi
+  if command -v open >/dev/null 2>&1; then
+    open "$URL" >/dev/null 2>&1 || true
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$URL" >/dev/null 2>&1 || true
+  fi
+}
+
+cmd_start() {
+  local pid=""
+  if pid="$(find_pid)"; then
+    echo "AI Speed 已在运行: $URL (PID $pid)"
+    open_url
+    return 0
+  fi
+
+  ensure_bin
+
+  nohup "$BIN" -addr "$ADDR" -open=false "$@" >>"$LOG_FILE" 2>&1 </dev/null &
+  pid=$!
+  echo "$pid" > "$PID_FILE"
+
+  local ready=0
+  for _ in $(seq 1 30); do
+    if curl --noproxy '*' -sf "$URL/api/config" >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  if [[ "$ready" -ne 1 ]]; then
+    rm -f "$PID_FILE"
+    echo "启动 AI Speed 失败，最近日志：" >&2
+    tail -n 20 "$LOG_FILE" >&2 || true
+    return 1
+  fi
+
+  open_url
+  echo "已启动 AI Speed: $URL (PID $pid)"
+  echo "再次执行 ais 或 ais stop 即可关闭"
+}
+
+cmd_stop() {
+  local pid=""
+  if ! pid="$(find_pid)"; then
+    echo "AI Speed 未在运行"
+    return 0
+  fi
+
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 30); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$PID_FILE"
+      echo "已关闭 AI Speed (PID $pid)"
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  if is_ai_speed_pid "$pid"; then
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  rm -f "$PID_FILE"
+  echo "已强制关闭 AI Speed (PID $pid)"
+}
+
+cmd_status() {
+  local pid=""
+  if pid="$(find_pid)"; then
+    echo "运行中: $URL (PID $pid)"
+    echo "日志: $LOG_FILE"
+  else
+    echo "未运行 ($URL)"
+  fi
+}
+
+cmd_open() {
+  if ! find_pid >/dev/null; then
+    cmd_start
+  else
+    open_url
+    echo "已打开: $URL"
+  fi
+}
+
+cmd_build() {
+  echo "正在编译 $BIN ..."
+  (cd "$PROJECT_DIR" && go build -o "$BIN" .)
+  echo "编译完成: $BIN"
+  if find_pid >/dev/null; then
+    echo "提示: 当前服务正在运行，执行 ais restart 可生效新版本"
+  fi
+}
+
+cmd_cli() {
+  ensure_bin
+  exec "$BIN" -cli "$@"
+}
+
+print_help() {
+  cat <<'EOF'
+ais - AI Speed 终端快捷管理命令
+
+用法:
+  ais               一键切换（未运行则后台启动并打开页面；运行中则关闭）
+  ais start|on      后台启动并打开浏览器（可透传参数，如 -clash-api http://127.0.0.1:9097）
+  ais stop|off      关闭后台运行的 AI Speed
+  ais restart       重启服务
+  ais status|st     查看运行状态与日志路径
+  ais open          打开 Web 界面（若未运行会自动启动）
+  ais log           查看最近 40 行日志
+  ais build         重新编译二进制
+  ais cli [参数]    直接运行终端测速模式（等同于 ai-speed -cli ...）
+  ais help|-h       显示此帮助
+EOF
+}
+
+ACTION="${1:-toggle}"
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+
+case "$ACTION" in
+  toggle)
+    if find_pid >/dev/null; then
+      cmd_stop
+    else
+      cmd_start
+    fi
+    ;;
+  start|on)
+    cmd_start "$@"
+    ;;
+  stop|off)
+    cmd_stop
+    ;;
+  restart)
+    cmd_stop
+    cmd_start "$@"
+    ;;
+  status|st)
+    cmd_status
+    ;;
+  open)
+    cmd_open
+    ;;
+  log|logs)
+    if [[ -f "$LOG_FILE" ]]; then
+      tail -n 40 "$LOG_FILE"
+    else
+      echo "暂无日志文件: $LOG_FILE"
+    fi
+    ;;
+  build)
+    cmd_build
+    ;;
+  cli)
+    cmd_cli "$@"
+    ;;
+  help|-h|--help)
+    print_help
+    ;;
+  *)
+    echo "未知子命令: $ACTION" >&2
+    print_help >&2
+    exit 1
+    ;;
+esac
