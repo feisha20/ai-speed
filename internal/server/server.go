@@ -69,6 +69,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /", s.serveStatic("index.html", "text/html; charset=utf-8"))
 	s.mux.HandleFunc("GET /style.css", s.serveStatic("style.css", "text/css; charset=utf-8"))
 	s.mux.HandleFunc("GET /app.js", s.serveStatic("app.js", "application/javascript; charset=utf-8"))
+	s.mux.HandleFunc("GET /theme-init.js", s.serveStatic("theme-init.js", "application/javascript; charset=utf-8"))
 
 	s.mux.HandleFunc("GET /api/config", s.handleConfig)
 	s.mux.HandleFunc("POST /api/egress", s.handleEgress)

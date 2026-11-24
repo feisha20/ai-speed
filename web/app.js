@@ -2,6 +2,7 @@
   "use strict";
 
   const SVG_NS = "http://www.w3.org/2000/svg";
+  const STORAGE_KEY = "color-scheme";
 
   function el(tag, attrs, ...children) {
     const node = document.createElement(tag);
@@ -40,6 +41,7 @@
     svg.setAttribute("stroke-width", "2");
     svg.setAttribute("stroke-linecap", "round");
     svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
 
     const p1 = document.createElementNS(SVG_NS, "path");
     p1.setAttribute("d", "M21 12a9 9 0 1 1-2.64-6.36");
@@ -58,27 +60,33 @@
     speedAbort: null,
     chartPoints: [],
     allRunning: false,
+    speedSession: {
+      completedBytes: 0,
+      overallPeakMbps: 0,
+      lastPositiveMbps: 0,
+    },
+    proxySnapshot: "",
   };
 
   const LATENCY_META = [
     { id: "baseline", name: "基准连通 (Google 204)", url: "https://www.gstatic.com/generate_204" },
     { id: "chatgpt", name: "ChatGPT / OpenAI", url: "https://api.openai.com/v1/models" },
     { id: "gemini", name: "Google Gemini", url: "https://gemini.google.com/" },
-    { id: "antigravity", name: "Antigravity (反重力)", url: "https://cloudcode-pa.googleapis.com/" },
+    { id: "antigravity", name: "Antigravity 反重力", url: "https://cloudcode-pa.googleapis.com/" },
     { id: "youtube", name: "YouTube", url: "https://www.youtube.com/generate_204" },
   ];
 
   const UNLOCK_META = [
     { id: "chatgpt", name: "ChatGPT / GPT" },
     { id: "gemini", name: "Google Gemini" },
-    { id: "antigravity", name: "Antigravity (反重力)" },
+    { id: "antigravity", name: "Antigravity 反重力" },
     { id: "youtube", name: "YouTube" },
   ];
 
   const SPEED_META = [
     { id: "chatgpt", name: "ChatGPT / GPT" },
     { id: "gemini", name: "Google Gemini" },
-    { id: "antigravity", name: "Antigravity (反重力)" },
+    { id: "antigravity", name: "Antigravity 反重力" },
     { id: "youtube", name: "YouTube" },
   ];
 
@@ -123,13 +131,176 @@
   }
 
   function updateProxyBadge(label) {
+    const textNode = document.getElementById("proxy-badge-text");
     const badge = document.getElementById("proxy-badge");
-    badge.textContent = label || "跟随系统代理";
+    const text = label || "跟随系统代理";
+    textNode.textContent = text;
+    badge.title = text;
   }
 
   function syncCustomProxyVisibility() {
     const mode = document.getElementById("cfg-proxy-mode").value;
     document.getElementById("custom-proxy-wrap").hidden = mode !== "custom";
+  }
+
+  /* Dark mode toggle (meta + :root fallback + localStorage divergence logic) */
+  const darkSchemeMedia = window.matchMedia("(prefers-color-scheme: dark)");
+
+  function getSavedScheme() {
+    try {
+      const v = localStorage.getItem(STORAGE_KEY);
+      return v === "light" || v === "dark" ? v : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function setSavedScheme(val) {
+    try {
+      if (val === "light" || val === "dark") {
+        localStorage.setItem(STORAGE_KEY, val);
+      } else {
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    } catch {}
+  }
+
+  function applyColorScheme(val) {
+    const meta = document.querySelector('meta[name="color-scheme"]');
+    const select = document.getElementById("cfg-theme-select");
+    if (val === "light" || val === "dark") {
+      if (meta) meta.content = val;
+      document.documentElement.dataset.colorScheme = val;
+      if (select) select.value = val;
+    } else {
+      if (meta) meta.content = "light dark";
+      delete document.documentElement.dataset.colorScheme;
+      if (select) select.value = "system";
+    }
+  }
+
+  function setupThemeControls() {
+    applyColorScheme(getSavedScheme());
+
+    document.getElementById("btn-theme-toggle").addEventListener("click", () => {
+      const saved = getSavedScheme();
+      const systemScheme = darkSchemeMedia.matches ? "dark" : "light";
+      const rendered = saved || systemScheme;
+      const target = rendered === "dark" ? "light" : "dark";
+      if (target === systemScheme) {
+        setSavedScheme(null);
+        applyColorScheme(null);
+      } else {
+        setSavedScheme(target);
+        applyColorScheme(target);
+      }
+    });
+
+    document.getElementById("cfg-theme-select").addEventListener("change", (e) => {
+      const v = e.target.value;
+      if (v === "light" || v === "dark") {
+        setSavedScheme(v);
+        applyColorScheme(v);
+      } else {
+        setSavedScheme(null);
+        applyColorScheme(null);
+      }
+    });
+
+    window.addEventListener("storage", (e) => {
+      if (e.key === STORAGE_KEY) {
+        applyColorScheme(getSavedScheme());
+      }
+    });
+  }
+
+  /* Native <dialog> top-layer exit + closedby fallbacks */
+  let supportsDisplayTransition;
+  function canTransitionDisplay() {
+    if (supportsDisplayTransition !== undefined) return supportsDisplayTransition;
+    if (!window.CSS?.supports?.("transition-behavior", "allow-discrete") || !document.body) {
+      return false;
+    }
+    const probe = document.createElement("div");
+    probe.style.cssText = "transition: display 1s allow-discrete !important; display: block;";
+    document.body.appendChild(probe);
+    getComputedStyle(probe).display;
+    probe.style.display = "none";
+    supportsDisplayTransition = getComputedStyle(probe).display === "block";
+    probe.remove();
+    return supportsDisplayTransition;
+  }
+
+  function supportsTopLayerExit() {
+    return Boolean(window.CSS?.supports?.("overlay", "auto") && canTransitionDisplay());
+  }
+
+  async function closeTopLayer(dialog, returnValue) {
+    if (!dialog.open) return;
+    if (!supportsTopLayerExit()) {
+      dialog.setAttribute("data-closing", "");
+      const animations = dialog.getAnimations({ subtree: true });
+      if (animations.length > 0) {
+        await Promise.race([
+          Promise.allSettled(animations.map((a) => a.finished)),
+          new Promise((r) => setTimeout(r, 400)),
+        ]);
+      }
+      if (!dialog.hasAttribute("data-closing")) return;
+      dialog.removeAttribute("data-closing");
+    }
+    dialog.close(returnValue);
+  }
+
+  function setupSettingsDialog() {
+    const dialog = document.getElementById("settings-dialog");
+    const openBtn = document.getElementById("btn-open-settings");
+
+    if (!("commandForElement" in HTMLButtonElement.prototype)) {
+      openBtn.addEventListener("click", () => {
+        if (!dialog.open) dialog.showModal();
+      });
+    }
+
+    dialog.addEventListener("cancel", (e) => {
+      e.preventDefault();
+      closeTopLayer(dialog, "");
+    });
+
+    if (!("closedBy" in HTMLDialogElement.prototype)) {
+      const outside = (e) => {
+        const r = dialog.getBoundingClientRect();
+        return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+      };
+      let pressedOutside = false;
+      dialog.addEventListener("pointerdown", (e) => {
+        pressedOutside = outside(e);
+      });
+      dialog.addEventListener("pointerup", (e) => {
+        if (pressedOutside && outside(e)) {
+          closeTopLayer(dialog, "");
+        }
+      });
+    }
+
+    dialog.addEventListener("click", (e) => {
+      const submitBtn = e.target.closest('form[method="dialog"] button[type="submit"]');
+      if (!submitBtn || supportsTopLayerExit()) return;
+      e.preventDefault();
+      closeTopLayer(dialog, submitBtn.value || "");
+    });
+
+    dialog.addEventListener("close", () => {
+      const val = dialog.returnValue;
+      dialog.returnValue = "";
+      const nextProxy = JSON.stringify(getProxyConfig());
+      if (nextProxy !== state.proxySnapshot) {
+        state.proxySnapshot = nextProxy;
+        refreshEgress();
+      } else if (val === "apply") {
+        refreshEgress();
+      }
+    });
   }
 
   function renderEgress(info) {
@@ -149,7 +320,7 @@
 
     if (info.error && !info.ipv4 && !info.ipv6Available) {
       dot.className = "status-dot fail";
-      box.appendChild(el("p", { className: "pill pill-fail", textContent: info.error }));
+      box.appendChild(el("p", { className: "pill pill-fail", textContent: `✕ ${info.error}` }));
       return;
     }
 
@@ -175,11 +346,11 @@
           : "IPv6: 未启用",
       })
     );
-    if (info.checkedAt) meta.appendChild(el("span", { textContent: `检测于 ${info.checkedAt}` }));
+    if (info.checkedAt) meta.appendChild(el("span", { className: "tabular", textContent: `检测于 ${info.checkedAt}` }));
     box.appendChild(meta);
 
     if (info.ipv6LeakWarning) {
-      box.appendChild(el("div", { className: "warn-banner", textContent: `⚠️ ${info.ipv6LeakWarning}` }));
+      box.appendChild(el("div", { className: "warn-banner", textContent: `⚠ ${info.ipv6LeakWarning}` }));
     }
   }
 
@@ -200,7 +371,7 @@
     if (errMsg) {
       dot.className = "status-dot fail";
       verPill.hidden = true;
-      body.appendChild(el("p", { className: "pill pill-fail", textContent: errMsg }));
+      body.appendChild(el("p", { className: "pill pill-fail", textContent: `✕ ${errMsg}` }));
       const retryWrap = el("div", { className: "clash-quick-row" });
       const inp = el("input", {
         type: "text",
@@ -234,7 +405,7 @@
     }
 
     const groups = data.groups;
-    let activeGroup = groups.find((g) => g.name === state.selectedGroup) ||
+    const activeGroup = groups.find((g) => g.name === state.selectedGroup) ||
       groups.find((g) => g.selectable) ||
       groups[0];
     state.selectedGroup = activeGroup.name;
@@ -346,70 +517,76 @@
         host = new URL(meta.url).host;
       } catch {}
 
-      const card = el("article", { className: "card latency-card" },
-        el("div", { className: "latency-top" },
-          el("div", null,
-            el("div", { className: "latency-name", textContent: meta.name }),
-            el("div", { className: "latency-host", textContent: host })
-          ),
-          btn
-        )
+      const headerRow = el("div", { className: "latency-top" },
+        el("div", { className: "latency-title-wrap" },
+          el("div", { className: "latency-name", textContent: meta.name }),
+          el("span", { className: "latency-host", tabindex: "0", title: host },
+            el("span", { textContent: host })
+          )
+        ),
+        btn
       );
 
+      let valueRow;
+      let detailBlock;
+
       if (isLoading) {
-        card.appendChild(el("span", { className: "pill pill-neutral", textContent: "探测中..." }));
+        valueRow = el("div", { className: "latency-value-row" },
+          el("span", { className: "pill pill-neutral", textContent: "探测中..." })
+        );
+        detailBlock = el("div", { className: "muted-text", textContent: "正在执行 3 次握手采样..." });
       } else if (!item) {
-        card.appendChild(el("span", { className: "pill pill-neutral", textContent: "待测试" }));
+        valueRow = el("div", { className: "latency-value-row" },
+          el("span", { className: "pill pill-neutral", textContent: "待测试" })
+        );
+        detailBlock = el("div", { className: "muted-text", textContent: "点击测试按钮开始探测" });
       } else {
-        const msText = item.avgMs > 0 ? `${item.avgMs} ms` : "失败";
-        card.appendChild(
-          el("div", { className: "latency-value-row" },
-            el("span", { className: `latency-ms-badge ${latencyRatingClass(item.rating)}`, textContent: msText }),
-            el("span", { className: "muted-text tabular", textContent: `成功率 ${item.successCount}/${item.totalCount}` })
-          )
+        const msText = item.avgMs > 0 ? `${item.avgMs} ms` : "✕ 失败";
+        valueRow = el("div", { className: "latency-value-row" },
+          el("span", { className: `latency-ms-badge ${latencyRatingClass(item.rating)}`, textContent: msText }),
+          el("span", { className: "muted-text tabular", textContent: `成功率 ${item.successCount}/${item.totalCount}` })
         );
         if (item.successCount > 0) {
-          card.appendChild(
-            el("div", { className: "latency-metrics" },
-              el("span", { textContent: `最小/最大: ${item.minMs}/${item.maxMs} ms` }),
-              el("span", { textContent: `抖动: ${item.jitterMs} ms` }),
-              el("span", { textContent: `建连: ${item.avgConnectMs} ms` }),
-              el("span", { textContent: `TLS: ${item.avgTlsMs} ms` })
-            )
+          detailBlock = el("div", { className: "latency-metrics" },
+            el("div", { className: "metric-cell" }, el("span", { textContent: "最小/最大" }), el("strong", { textContent: `${item.minMs}/${item.maxMs} ms` })),
+            el("div", { className: "metric-cell" }, el("span", { textContent: "抖动" }), el("strong", { textContent: `${item.jitterMs} ms` })),
+            el("div", { className: "metric-cell" }, el("span", { textContent: "代理连接" }), el("strong", { textContent: `${item.avgConnectMs} ms` })),
+            el("div", { className: "metric-cell" }, el("span", { textContent: "TLS" }), el("strong", { textContent: `${item.avgTlsMs} ms` }))
           );
-        } else if (item.lastError) {
-          card.appendChild(el("p", { className: "muted-text", textContent: item.lastError }));
+        } else {
+          detailBlock = el("p", { className: "muted-text", textContent: item.lastError || "连接超时" });
         }
       }
-      grid.appendChild(card);
+
+      grid.appendChild(el("article", { className: "card latency-card" }, headerRow, valueRow, detailBlock));
     }
   }
 
-  function unlockStatusClass(status) {
+  function unlockStatusBadge(status, label) {
     switch (status) {
       case "yes":
-        return "pill-ok";
+        return { cls: "pill-ok", text: `✓ ${label}` };
       case "partial":
       case "risk":
-        return "pill-warn";
+        return { cls: "pill-warn", text: `⚠ ${label}` };
       case "no":
       case "failed":
-        return "pill-fail";
+        return { cls: "pill-fail", text: `✕ ${label}` };
       default:
-        return "pill-neutral";
+        return { cls: "pill-neutral", text: label };
     }
   }
 
   function subcheckPill(status) {
     switch (status) {
       case "ok":
-        return { cls: "pill-ok", text: "通过" };
+        return { cls: "pill-ok", text: "✓ 通过" };
       case "warn":
-        return { cls: "pill-warn", text: "提示" };
+        return { cls: "pill-warn", text: "⚠ 提示" };
       case "fail":
-        return { cls: "pill-fail", text: "拦截" };
+        return { cls: "pill-fail", text: "✕ 拦截" };
       default:
-        return { cls: "pill-neutral", text: "跳过" };
+        return { cls: "pill-neutral", text: "– 跳过" };
     }
   }
 
@@ -429,55 +606,60 @@
         onClick: () => runUnlock(meta.id),
       }, refreshSvg());
 
-      const card = el("article", { className: "card unlock-card" },
-        el("div", { className: "card-head" },
-          el("h3", { textContent: meta.name }),
-          btn
-        )
+      const head = el("div", { className: "card-head" },
+        el("h3", { textContent: meta.name }),
+        btn
       );
 
-      if (isLoading) {
-        card.appendChild(el("span", { className: "pill pill-neutral", textContent: "检测中..." }));
-      } else if (!item) {
-        card.appendChild(el("span", { className: "pill pill-neutral", textContent: "待检测" }));
-      } else {
-        const regionLabel = [item.emoji, item.region].filter(Boolean).join(" ");
-        card.appendChild(
-          el("div", { className: "unlock-badges" },
-            el("div", { className: "unlock-badge-left" },
-              el("span", { className: `pill ${unlockStatusClass(item.status)}`, textContent: item.statusText }),
-              regionLabel ? el("span", { className: "pill pill-accent", textContent: regionLabel }) : null
-            ),
-            el("span", { className: "unlock-time", textContent: item.checkedAt || "" })
-          )
-        );
-        card.appendChild(el("p", { className: "unlock-summary", textContent: item.summary }));
+      let badgeRow;
+      let summaryEl;
+      let subList;
 
-        const list = el("ul", { className: "subcheck-list" });
+      if (isLoading) {
+        badgeRow = el("div", { className: "unlock-badges" }, el("span", { className: "pill pill-neutral", textContent: "检测中..." }));
+        summaryEl = el("p", { className: "muted-text", textContent: "正在并行探测可用性与地区限制..." });
+        subList = el("ul", { className: "subcheck-list" });
+      } else if (!item) {
+        badgeRow = el("div", { className: "unlock-badges" }, el("span", { className: "pill pill-neutral", textContent: "待检测" }));
+        summaryEl = el("p", { className: "muted-text", textContent: "点击右上角刷新或上方按钮开始检测" });
+        subList = el("ul", { className: "subcheck-list" });
+      } else {
+        const badge = unlockStatusBadge(item.status, item.statusText);
+        const regionLabel = [item.emoji, item.region].filter(Boolean).join(" ");
+        badgeRow = el("div", { className: "unlock-badges" },
+          el("div", { className: "unlock-badge-left" },
+            el("span", { className: `pill ${badge.cls}`, textContent: badge.text }),
+            regionLabel ? el("span", { className: "pill pill-accent", textContent: regionLabel }) : null
+          ),
+          el("span", { className: "unlock-time", textContent: item.checkedAt || "" })
+        );
+        summaryEl = el("p", { className: "unlock-summary", textContent: item.summary });
+
+        subList = el("ul", { className: "subcheck-list" });
         for (const sub of item.subChecks || []) {
-          const badge = subcheckPill(sub.status);
-          list.appendChild(
+          const subBadge = subcheckPill(sub.status);
+          subList.appendChild(
             el("li", { className: "subcheck-item" },
               el("div", { className: "subcheck-left" },
                 el("span", { className: "subcheck-label", textContent: sub.label }),
                 el("span", { className: "subcheck-detail", textContent: sub.detail })
               ),
-              el("div", { className: "inline-actions" },
+              el("div", { className: "subcheck-right" },
                 sub.latencyMs > 0 ? el("span", { className: "subcheck-ms", textContent: `${sub.latencyMs}ms` }) : null,
-                el("span", { className: `pill ${badge.cls}`, textContent: badge.text })
+                el("span", { className: `pill ${subBadge.cls}`, textContent: subBadge.text })
               )
             )
           );
         }
-        card.appendChild(list);
       }
 
-      grid.appendChild(card);
+      grid.appendChild(el("article", { className: "card unlock-card" }, head, badgeRow, summaryEl, subList));
     }
   }
 
   function renderSpeedChart(points) {
     const svg = document.getElementById("speed-chart");
+    const scaleLabel = document.getElementById("speed-chart-max");
     svg.replaceChildren();
     const w = 420;
     const h = 110;
@@ -495,9 +677,15 @@
       svg.appendChild(line);
     }
 
-    if (!points || points.length === 0) return;
+    if (!points || points.length === 0) {
+      scaleLabel.textContent = "";
+      return;
+    }
 
-    const maxVal = Math.max(10, ...points) * 1.15;
+    const rawMax = Math.max(10, ...points);
+    const maxVal = rawMax * 1.15;
+    scaleLabel.textContent = `峰值 ${Math.max(...points).toFixed(1)} Mbps`;
+
     const coords = points.map((val, idx) => {
       const x = points.length === 1 ? w - pad : pad + (idx / (points.length - 1)) * (w - pad * 2);
       const y = h - pad - (Math.max(0, val) / maxVal) * (h - pad * 2);
@@ -538,24 +726,28 @@
       strip.hidden = false;
       for (const link of report.links) {
         if (link.isFallback && link.note) {
-          banner.textContent = `ℹ️ ${link.note}`;
+          banner.textContent = `⚠ ${link.note}`;
           banner.hidden = false;
         }
         strip.appendChild(
           el("div", { className: "link-chip" },
-            el("div", { className: "inline-actions" },
+            el("div", { className: "link-chip-head" },
               el("strong", { textContent: link.name }),
               el("span", {
                 className: `pill ${link.ok ? "pill-ok" : "pill-fail"}`,
-                textContent: link.ok ? `${link.avgMbps.toFixed(2)} Mbps` : "失败",
+                textContent: link.ok ? `✓ ${link.avgMbps.toFixed(2)} Mbps` : "✕ 失败",
               })
             ),
-            el("span", {
-              className: "muted-text tabular",
-              textContent: link.ok
-                ? `峰值 ${link.peakMbps.toFixed(2)} Mbps · ${(link.bytes / 1048576).toFixed(2)} MB · TTFB ${link.ttfbMs}ms`
-                : (link.error || "连接失败"),
-            })
+            link.ok
+              ? el("span", {
+                  className: "muted-text tabular",
+                  textContent: `峰值 ${link.peakMbps.toFixed(2)} Mbps · ${(link.bytes / 1048576).toFixed(2)} MB · TTFB ${link.ttfbMs}ms`,
+                })
+              : el("span", {
+                  className: "link-error-text",
+                  title: link.error || "连接失败",
+                  textContent: link.error || "连接失败",
+                })
           )
         );
       }
@@ -565,46 +757,52 @@
 
     for (const meta of SPEED_META) {
       const item = map.get(meta.id);
-      const card = el("article", { className: "card speed-target-card" },
-        el("div", { className: "card-head" },
-          el("h3", { textContent: meta.name }),
-          item ? el("span", { className: `pill ${item.downloadMbps > 0 ? "pill-accent" : "pill-fail"}`, textContent: item.qualityTag }) : el("span", { className: "pill pill-neutral", textContent: "待测速" })
-        )
+      const head = el("div", { className: "card-head" },
+        el("h3", { textContent: meta.name }),
+        item
+          ? el("span", {
+              className: `pill ${item.downloadMbps > 0 ? "pill-accent" : "pill-fail"}`,
+              textContent: item.qualityTag,
+            })
+          : el("span", { className: "pill pill-neutral", textContent: "待测速" })
       );
 
-      if (item) {
-        card.appendChild(
-          el("div", { className: "speed-number-row" },
-            el("span", { className: "speed-big-stat", textContent: item.downloadMbps > 0 ? item.downloadMbps.toFixed(2) : "--" }),
-            el("span", { className: "speed-unit", textContent: "Mbps 下行" })
-          )
-        );
-        const metaRows = el("div", { className: "meta-list tabular" },
-          el("span", { textContent: `链路: ${item.backboneLabel}` }),
-          item.uploadMbps > 0 ? el("span", { textContent: `上行: ${item.uploadMbps.toFixed(2)} Mbps` }) : null,
-          item.ttfbMs > 0 ? el("span", { textContent: `TTFB: ${item.ttfbMs} ms` }) : null,
-          item.jitterMs > 0 ? el("span", { textContent: `抖动: ${item.jitterMs} ms` }) : null,
-          item.ggcNode ? el("span", { textContent: `GGC 节点: ${item.ggcNode}` }) : null
-        );
-        card.appendChild(metaRows);
+      let bigRow;
+      let foot;
 
-        if (item.tokenSpeed) {
-          const ts = item.tokenSpeed;
-          card.appendChild(
-            el("div", { className: `pill ${ts.ok ? "pill-ok" : "pill-warn"}` },
-              document.createTextNode(
-                ts.ok
-                  ? `${ts.model}: TTFT ${ts.ttftMs}ms · ${ts.tokensPerSec.toFixed(1)} tok/s`
-                  : `${ts.model}: ${ts.error}`
+      if (item) {
+        bigRow = el("div", { className: "speed-number-row" },
+          el("span", { className: "speed-big-stat", textContent: item.downloadMbps > 0 ? item.downloadMbps.toFixed(2) : "--" }),
+          el("span", { className: "speed-unit", textContent: "Mbps 下行" })
+        );
+        foot = el("div", { className: "speed-target-foot" },
+          el("div", { className: "meta-list tabular" },
+            el("span", { textContent: `链路: ${item.backboneLabel}` }),
+            item.uploadMbps > 0 ? el("span", { textContent: `上行: ${item.uploadMbps.toFixed(2)} Mbps` }) : null,
+            item.ttfbMs > 0 ? el("span", { textContent: `TTFB: ${item.ttfbMs} ms` }) : null,
+            item.jitterMs > 0 ? el("span", { textContent: `抖动: ${item.jitterMs} ms` }) : null,
+            item.ggcNode ? el("span", { textContent: `GGC 节点: ${item.ggcNode}` }) : null
+          ),
+          item.tokenSpeed
+            ? el("div", { className: `pill ${item.tokenSpeed.ok ? "pill-ok" : "pill-warn"}` },
+                document.createTextNode(
+                  item.tokenSpeed.ok
+                    ? `${item.tokenSpeed.model}: TTFT ${item.tokenSpeed.ttftMs}ms · ${item.tokenSpeed.tokensPerSec.toFixed(1)} tok/s`
+                    : `${item.tokenSpeed.model}: ${item.tokenSpeed.error}`
+                )
               )
-            )
-          );
-        }
-        if (item.note) {
-          card.appendChild(el("p", { className: "muted-text", textContent: item.note }));
-        }
+            : null,
+          item.note ? el("p", { className: "muted-text", textContent: item.note }) : null
+        );
+      } else {
+        bigRow = el("div", { className: "speed-number-row" },
+          el("span", { className: "speed-big-stat muted-text", textContent: "--" }),
+          el("span", { className: "speed-unit", textContent: "Mbps 下行" })
+        );
+        foot = el("p", { className: "muted-text", textContent: "等待测速" });
       }
-      grid.appendChild(card);
+
+      grid.appendChild(el("article", { className: "card speed-target-card" }, head, bigRow, foot));
     }
   }
 
@@ -717,34 +915,65 @@
       stageEl.textContent = ev.label || ev.stage;
       return;
     }
+
     if (ev.type === "sample") {
       const mbps = ev.currentMbps || ev.avgMbps || 0;
+      if (mbps > 0) state.speedSession.lastPositiveMbps = mbps;
+      state.speedSession.overallPeakMbps = Math.max(
+        state.speedSession.overallPeakMbps,
+        ev.peakMbps || 0,
+        mbps
+      );
+      const totalTransferred = state.speedSession.completedBytes + (ev.downloaded || 0);
       liveEl.textContent = mbps.toFixed(2);
-      peakEl.textContent = (ev.peakMbps || 0).toFixed(2);
-      txEl.textContent = ((ev.downloaded || 0) / 1048576).toFixed(2);
+      peakEl.textContent = state.speedSession.overallPeakMbps.toFixed(2);
+      txEl.textContent = (totalTransferred / 1048576).toFixed(2);
       if (ev.totalBytes > 0) {
         const pct = Math.min(100, Math.round((ev.downloaded / ev.totalBytes) * 100));
-        fillEl.style.width = `${pct}%`;
+        fillEl.style.inlineSize = `${pct}%`;
       }
       state.chartPoints.push(mbps);
       if (state.chartPoints.length > 60) state.chartPoints.shift();
       renderSpeedChart(state.chartPoints);
       return;
     }
+
     if (ev.type === "link_done") {
-      liveEl.textContent = (ev.avgMbps || 0).toFixed(2);
-      peakEl.textContent = (ev.peakMbps || 0).toFixed(2);
-      txEl.textContent = ((ev.downloaded || 0) / 1048576).toFixed(2);
-      fillEl.style.width = "100%";
+      state.speedSession.completedBytes += ev.downloaded || 0;
+      if (ev.peakMbps > 0) {
+        state.speedSession.overallPeakMbps = Math.max(state.speedSession.overallPeakMbps, ev.peakMbps);
+      }
+      if (ev.avgMbps > 0) {
+        state.speedSession.lastPositiveMbps = ev.avgMbps;
+        liveEl.textContent = ev.avgMbps.toFixed(2);
+      }
+      peakEl.textContent = state.speedSession.overallPeakMbps.toFixed(2);
+      txEl.textContent = (state.speedSession.completedBytes / 1048576).toFixed(2);
+      fillEl.style.inlineSize = "100%";
       return;
     }
+
     if (ev.type === "done" && ev.report) {
-      stageEl.textContent = "测速完成";
-      fillEl.style.width = "100%";
+      const links = Array.isArray(ev.report.links) ? ev.report.links : [];
+      const okDownLinks = links.filter((l) => l.id !== "upload" && l.ok && l.avgMbps > 0);
+      const okAllLinks = links.filter((l) => l.ok);
+
+      const bestDown = okDownLinks.reduce((m, l) => Math.max(m, l.avgMbps), 0);
+      const maxPeak = okAllLinks.reduce((m, l) => Math.max(m, l.peakMbps), state.speedSession.overallPeakMbps);
+      const totalBytes = links.reduce((sum, l) => sum + (l.bytes || 0), 0);
+
+      liveEl.textContent = bestDown.toFixed(2);
+      peakEl.textContent = maxPeak.toFixed(2);
+      txEl.textContent = (totalBytes / 1048576).toFixed(2);
+      stageEl.textContent = bestDown > 0
+        ? `测速完成 · 最佳下行 ${bestDown.toFixed(2)} Mbps`
+        : "测速完成（可用链路测速失败）";
+      fillEl.style.inlineSize = "100%";
       lastAtEl.textContent = `完成于 ${ev.report.checkedAt}`;
       renderSpeedTargets(ev.report);
       return;
     }
+
     if (ev.type === "error") {
       stageEl.textContent = `测速错误: ${ev.message || "未知错误"}`;
     }
@@ -762,11 +991,13 @@
     const controller = new AbortController();
     state.speedAbort = controller;
     state.chartPoints = [];
+    state.speedSession = { completedBytes: 0, overallPeakMbps: 0, lastPositiveMbps: 0 };
     renderSpeedChart([]);
-    document.getElementById("speed-progress-fill").style.width = "0%";
+    document.getElementById("speed-progress-fill").style.inlineSize = "0%";
     document.getElementById("speed-live-mbps").textContent = "0.00";
     document.getElementById("speed-peak-mbps").textContent = "0.00";
-    document.getElementById("speed-transferred").textContent = "0.0";
+    document.getElementById("speed-transferred").textContent = "0.00";
+    document.getElementById("speed-last-at").textContent = "";
     setSpeedButtonRunning(true);
 
     const keys = getAPIKeys();
@@ -855,34 +1086,17 @@
     }
   }
 
-  function setupThemeToggle() {
-    const root = document.documentElement;
-    const btn = document.getElementById("btn-theme-toggle");
-    btn.addEventListener("click", () => {
-      const current = root.getAttribute("data-theme");
-      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-      const isDarkNow = current ? current === "dark" : prefersDark;
-      root.setAttribute("data-theme", isDarkNow ? "light" : "dark");
-    });
-  }
-
   async function init() {
     renderLatencyGrid();
     renderUnlockGrid();
     renderSpeedTargets(null);
     renderSpeedChart([]);
     setupViewFilter();
-    setupThemeToggle();
+    setupThemeControls();
+    setupSettingsDialog();
 
     document.getElementById("cfg-proxy-mode").addEventListener("change", () => {
       syncCustomProxyVisibility();
-    });
-
-    document.getElementById("btn-toggle-settings").addEventListener("click", (e) => {
-      const drawer = document.getElementById("settings-drawer");
-      const nextHidden = !drawer.hidden;
-      drawer.hidden = nextHidden;
-      e.currentTarget.setAttribute("aria-expanded", String(!nextHidden));
     });
 
     document.getElementById("btn-refresh-egress").addEventListener("click", refreshEgress);
@@ -919,6 +1133,7 @@
       }
     } catch {}
 
+    state.proxySnapshot = JSON.stringify(getProxyConfig());
     syncCustomProxyVisibility();
     refreshEgress();
   }

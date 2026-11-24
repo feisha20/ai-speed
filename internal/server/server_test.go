@@ -39,6 +39,16 @@ func TestServerStaticAndSecurityHeaders(t *testing.T) {
 		t.Fatal("missing X-Frame-Options: DENY")
 	}
 
+	// Verify /theme-init.js returns 200 with nosniff
+	themeResp, err := http.Get(ts.URL + "/theme-init.js")
+	if err != nil {
+		t.Fatalf("GET /theme-init.js failed: %v", err)
+	}
+	themeResp.Body.Close()
+	if themeResp.StatusCode != http.StatusOK || themeResp.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("unexpected /theme-init.js response: status=%d nosniff=%q", themeResp.StatusCode, themeResp.Header.Get("X-Content-Type-Options"))
+	}
+
 	// Verify unknown static path returns 404
 	notFoundResp, err := http.Get(ts.URL + "/nonexistent.js")
 	if err != nil {

@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
+  <script src="/theme-init.js"></script>
   <title>AI Speed · 节点延迟、AI 解锁与网速测试</title>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -18,22 +19,31 @@
             <path d="M6 20v-4"/>
           </svg>
         </span>
-        <div>
+        <div class="brand-text">
           <h1 class="brand-title">AI Speed</h1>
           <p class="brand-sub">GPT · Gemini · Antigravity · YouTube 专项测试</p>
         </div>
       </div>
 
       <div class="topbar-actions">
-        <span id="proxy-badge" class="pill pill-neutral">代理检测中...</span>
-        <button type="button" id="btn-toggle-settings" class="btn btn-secondary" aria-expanded="false" aria-controls="settings-drawer">
+        <span id="proxy-badge" class="pill pill-neutral pill-ellipsis"><span id="proxy-badge-text">代理检测中...</span></span>
+        <button type="button" id="btn-open-settings" command="show-modal" commandfor="settings-dialog" class="btn btn-secondary">
           代理与 Clash 设置
         </button>
-        <button type="button" id="btn-theme-toggle" class="btn btn-icon" title="切换浅色/深色主题" aria-label="切换浅色或深色主题">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="4"/>
-            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
-          </svg>
+        <button type="button" id="btn-theme-toggle" class="btn-icon theme-toggle-btn" title="切换浅色/深色主题">
+          <span class="theme-opt theme-opt-dark">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
+            </svg>
+            <span class="sr-only">切换为深色主题</span>
+          </span>
+          <span class="theme-opt theme-opt-light">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="4"/>
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+            </svg>
+            <span class="sr-only">切换为浅色主题</span>
+          </span>
         </button>
         <button type="button" id="btn-run-all" class="btn btn-primary">
           一键全部测试
@@ -42,8 +52,22 @@
     </div>
   </header>
 
-  <main class="container">
-    <section id="settings-drawer" class="card drawer" hidden>
+  <dialog id="settings-dialog" closedby="any" aria-labelledby="settings-dialog-title">
+    <header class="dialog-header">
+      <div>
+        <h1 id="settings-dialog-title">代理、Clash 与测速设置</h1>
+        <p class="hint-text">配置立即生效，不落盘存储敏感密钥</p>
+      </div>
+      <form method="dialog">
+        <button type="submit" value="close" id="btn-close-settings" class="icon-btn" aria-label="关闭设置">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 6 6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </form>
+    </header>
+
+    <div class="dialog-body">
       <div class="drawer-grid">
         <div class="field-group">
           <h2 class="drawer-title">代理接入方式</h2>
@@ -78,7 +102,7 @@
         </div>
 
         <div class="field-group">
-          <h2 class="drawer-title">测速流量控制</h2>
+          <h2 class="drawer-title">测速流量与外观</h2>
           <label class="field">
             <span>单条链路最大下载流量</span>
             <select id="cfg-download-mb">
@@ -96,6 +120,14 @@
               <option value="5">5 MB</option>
             </select>
           </label>
+          <label class="field">
+            <span>界面主题偏好</span>
+            <select id="cfg-theme-select">
+              <option value="system">跟随系统</option>
+              <option value="light">浅色模式</option>
+              <option value="dark">深色模式</option>
+            </select>
+          </label>
         </div>
 
         <div class="field-group">
@@ -111,17 +143,25 @@
           </label>
         </div>
       </div>
-    </section>
+    </div>
 
+    <footer class="dialog-footer">
+      <form method="dialog">
+        <button type="submit" value="apply" class="btn btn-primary" autofocus>完成并应用</button>
+      </form>
+    </footer>
+  </dialog>
+
+  <main class="container">
     <section class="status-grid" aria-label="当前出口与节点状态">
       <article class="card status-card">
         <div class="card-head">
           <div class="card-title-row">
-            <span class="status-dot" id="egress-dot"></span>
+            <span class="status-dot" id="egress-dot" aria-hidden="true"></span>
             <h2>当前出口网络</h2>
           </div>
           <button type="button" id="btn-refresh-egress" class="icon-btn" title="刷新出口网络" aria-label="刷新出口网络">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
               <polyline points="21 3 21 9 15 9"/>
             </svg>
@@ -135,12 +175,12 @@
       <article class="card status-card">
         <div class="card-head">
           <div class="card-title-row">
-            <span class="status-dot" id="clash-dot"></span>
+            <span class="status-dot" id="clash-dot" aria-hidden="true"></span>
             <h2>当前 Clash 节点</h2>
             <span id="clash-version-pill" class="pill pill-neutral" hidden></span>
           </div>
           <button type="button" id="btn-refresh-clash" class="icon-btn" title="刷新 Clash 节点" aria-label="刷新 Clash 节点">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
               <polyline points="21 3 21 9 15 9"/>
             </svg>
@@ -208,11 +248,12 @@
             </div>
             <div class="speed-sub-metrics">
               <span>峰值: <strong id="speed-peak-mbps" class="tabular">0.00</strong> Mbps</span>
-              <span>已传输: <strong id="speed-transferred" class="tabular">0.0</strong> MB</span>
-              <span id="speed-last-at"></span>
+              <span>已传输: <strong id="speed-transferred" class="tabular">0.00</strong> MB</span>
+              <span id="speed-last-at" class="tabular"></span>
             </div>
           </div>
           <div class="speed-chart-wrap" aria-label="实时网速波形图">
+            <span id="speed-chart-max" class="chart-scale-label tabular"></span>
             <svg id="speed-chart" viewBox="0 0 420 110" preserveAspectRatio="none"></svg>
           </div>
         </div>
